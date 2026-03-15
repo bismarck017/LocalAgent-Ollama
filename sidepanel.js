@@ -310,10 +310,32 @@ async function checkConn() {
     const { connected } = await chrome.runtime.sendMessage({ action: 'checkConnection' });
     statusDot.className = `dot ${connected ? 'connected' : 'disconnected'}`;
     statusText.textContent = connected ? 'Ollama connected' : 'Ollama disconnected';
+    setSetupBanner(!connected);
   } catch {
     statusDot.className = 'dot disconnected';
     statusText.textContent = 'Ollama disconnected';
+    setSetupBanner(true);
   }
+}
+
+function setSetupBanner(show) {
+  const existing = document.getElementById('setup-banner');
+  if (!show) { existing?.remove(); return; }
+  if (existing) return;
+  const banner = document.createElement('div');
+  banner.id = 'setup-banner';
+  banner.innerHTML = `
+    <div class="setup-banner">
+      <strong>Ollama is not running</strong>
+      <p>This extension requires <a href="https://ollama.com" target="_blank">Ollama</a> installed and running on your machine.</p>
+      <ol>
+        <li>Download and install Ollama from <strong>ollama.com</strong></li>
+        <li>Run: <code>OLLAMA_ORIGINS="*" ollama serve</code></li>
+        <li>Pull a model: <code>ollama pull llama3</code></li>
+        <li>Click the reconnect button above</li>
+      </ol>
+    </div>`;
+  chat.prepend(banner);
 }
 
 // ── Tabs & autocomplete ───────────────────────────────────────────────────

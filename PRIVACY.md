@@ -12,12 +12,12 @@ Local-Agent Ollama is a browser extension that connects to a locally running [Ol
 
 ## What the Extension Accesses
 
-| Data | Purpose | Stored? | Transmitted? |
-|---|---|---|---|
-| Page content (text) | Provided as context to your local AI model | No | No — sent only to `localhost:11434` |
-| Tab titles and URLs | Used to identify tabs when you use `@tabname` | No | No |
-| Chat history | Saved locally so conversations persist across sessions | Locally only (chrome.storage) | No |
-| Active tab | Required to read the current page and execute agent actions | No | No |
+| Data                | Purpose                                                     | Stored?                       | Transmitted?                        |
+| ------------------- | ----------------------------------------------------------- | ----------------------------- | ----------------------------------- |
+| Page content (text) | Provided as context to your local AI model                  | No                            | No — sent only to `localhost:11434` |
+| Tab titles and URLs | Used to identify tabs when you use `@tabname`               | No                            | No                                  |
+| Chat history        | Saved locally so conversations persist across sessions      | Locally only (chrome.storage) | No                                  |
+| Active tab          | Required to read the current page and execute agent actions | No                            | No                                  |
 
 ## Local Storage
 

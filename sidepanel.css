@@ -59,6 +59,24 @@ body {
 }
 
 
+/* ── Setup banner ─────────────────────────────────────────────── */
+.setup-banner {
+  margin: 10px;
+  padding: 14px 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius);
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-2);
+}
+.setup-banner strong { color: var(--text); display: block; margin-bottom: 6px; font-size: 13px; }
+.setup-banner p { margin-bottom: 8px; }
+.setup-banner a { color: var(--brand); }
+.setup-banner ol { padding-left: 16px; }
+.setup-banner li { margin-bottom: 4px; }
+.setup-banner code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 11px; }
+
 /* ── Toolbar ──────────────────────────────────────────────────── */
 .toolbar {
   display: flex;
