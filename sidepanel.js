@@ -1,24 +1,37 @@
 // Local-Agent Ollama — side panel
 
-const chat        = document.getElementById('chat');
-const input       = document.getElementById('input');
-const sendBtn     = document.getElementById('send-btn');
-const modelSelect = document.getElementById('model-select');
-const statusDot   = document.getElementById('status-dot');
-const statusText  = document.getElementById('status-text');
-const agentBtn    = document.getElementById('agent-btn');
-const autocomplete      = document.getElementById('autocomplete');
-const autocompleteList  = document.getElementById('autocomplete-list');
+const chat             = document.getElementById('chat');
+const input            = document.getElementById('input');
+const sendBtn          = document.getElementById('send-btn');
+const modelSelect      = document.getElementById('model-select');
+const statusDot        = document.getElementById('status-dot');
+const statusText       = document.getElementById('status-text');
+const agentBtn         = document.getElementById('agent-btn');
+const agentBtnText     = document.getElementById('agent-btn-text');
+const autocomplete     = document.getElementById('autocomplete');
+const autocompleteList = document.getElementById('autocomplete-list');
+
+// Minimalist redesign elements
+const modelShelf       = document.getElementById('model-shelf');
+const modelPopover     = document.getElementById('model-popover');
+const currentModelName = document.getElementById('current-model-name');
+const modelList        = document.getElementById('model-list');
+const modelCountBadge  = document.getElementById('model-count-badge');
+const refreshModelsBtn = document.getElementById('refresh-models-btn');
+const dictateBtn       = document.getElementById('dictate-btn');
+const settingsBtn      = document.getElementById('settings-btn');
 
 let history       = [];     // { role, text, timestamp }
 let allTabs       = [];
 let selectedModel = null;
 let isLoading     = false;
 let agentMode     = false;
-let atStart       = -1;
 let tabIdx        = -1;
-let activeStreams  = {};    // messageId -> { loadingEl, el, text, resolve, reject }
-let activeAgents  = {};    // messageId -> { card, stepsEl, headerEl, spinnerEl }
+let activeStreams = {};     // messageId -> { loadingEl, el, text, resolve, reject }
+let activeAgents  = {};     // messageId -> { card, stepsEl, headerEl, spinnerEl }
+let isRecording   = false;
+let speechRec     = null;
+let savedRange    = null;
 
 // ── Utilities ─────────────────────────────────────────────────────────────
 
@@ -30,7 +43,9 @@ function ts(ms) {
   return new Date(ms).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 }
 
-function scrollBottom() { chat.scrollTop = chat.scrollHeight; }
+function scrollBottom() {
+  chat.scrollTop = chat.scrollHeight;
+}
 
 // ── Markdown ──────────────────────────────────────────────────────────────
 
@@ -70,7 +85,7 @@ function renderMsg(role, text, timestamp) {
   if (role === 'user') {
     avatar.textContent = 'U';
   } else {
-    avatar.innerHTML = `<svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#3b82f6"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg>`;
+    avatar.innerHTML = `<svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#10a37f"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg>`;
   }
 
   const body = document.createElement('div');
@@ -97,7 +112,10 @@ function renderMsg(role, text, timestamp) {
       navigator.clipboard.writeText(text).then(() => {
         copy.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Copied`;
         copy.classList.add('copied');
-        setTimeout(() => { copy.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`; copy.classList.remove('copied'); }, 2000);
+        setTimeout(() => {
+          copy.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`;
+          copy.classList.remove('copied');
+        }, 2000);
       });
     });
     footer.appendChild(copy);
@@ -117,7 +135,7 @@ function addThinking() {
   el.className = 'thinking';
   el.innerHTML = `
     <div class="msg-avatar" style="background:var(--surface-3)">
-      <svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#3b82f6"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg>
+      <svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#10a37f"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg>
     </div>
     <div class="thinking-dots"><span></span><span></span><span></span></div>`;
   chat.appendChild(el);
@@ -133,7 +151,7 @@ function addError(msg) {
   scrollBottom();
 }
 
-// ── Streaming message handler ─────────────────────────────────────────────
+// ── Streaming & Agent Message Handler ──────────────────────────────────────
 
 chrome.runtime.onMessage.addListener(msg => {
   // Chat streaming
@@ -146,7 +164,7 @@ chrome.runtime.onMessage.addListener(msg => {
         stream.el = document.createElement('div');
         stream.el.className = 'msg assistant';
         stream.el.innerHTML = `
-          <div class="msg-avatar"><svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#3b82f6"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg></div>
+          <div class="msg-avatar"><svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#10a37f"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg></div>
           <div class="msg-body"><div class="msg-bubble"></div></div>`;
         chat.appendChild(stream.el);
       }
@@ -162,7 +180,8 @@ chrome.runtime.onMessage.addListener(msg => {
       delete activeStreams[msg.messageId];
     }
     if (msg.action === 'streamError') {
-      stream.loadingEl?.remove(); stream.el?.remove();
+      stream.loadingEl?.remove();
+      stream.el?.remove();
       addError(msg.error);
       stream.reject(new Error(msg.error));
       delete activeStreams[msg.messageId];
@@ -181,6 +200,43 @@ chrome.runtime.onMessage.addListener(msg => {
       agent.stepsEl.appendChild(step);
       scrollBottom();
     }
+
+    // Step limit confirmation requested
+    if (msg.action === 'agentMaxStepsReached') {
+      agent.spinnerEl.style.display = 'none';
+      const promptCard = document.createElement('div');
+      promptCard.className = 'agent-step-prompt';
+      promptCard.innerHTML = `
+        <div class="prompt-desc">Reached step limit (${msg.currentSteps} steps). Would you like to continue?</div>
+        <div class="prompt-actions">
+          <button class="prompt-btn continue" type="button">Continue (+${msg.suggestedIncrement || 10} steps)</button>
+          <button class="prompt-btn end" type="button">End task</button>
+        </div>
+      `;
+      agent.stepsEl.appendChild(promptCard);
+      scrollBottom();
+
+      promptCard.querySelector('.continue').addEventListener('click', () => {
+        agent.spinnerEl.style.display = 'block';
+        promptCard.remove();
+        chrome.runtime.sendMessage({
+          action: 'agentDecision',
+          messageId: msg.messageId,
+          decision: 'continue',
+          additionalSteps: msg.suggestedIncrement || 10
+        });
+      });
+
+      promptCard.querySelector('.end').addEventListener('click', () => {
+        promptCard.remove();
+        chrome.runtime.sendMessage({
+          action: 'agentDecision',
+          messageId: msg.messageId,
+          decision: 'end'
+        });
+      });
+    }
+
     if (msg.action === 'agentComplete') {
       agent.spinnerEl.style.display = 'none';
       agent.headerEl.textContent = 'Agent done';
@@ -198,14 +254,70 @@ chrome.runtime.onMessage.addListener(msg => {
   }
 });
 
+// ── Contenteditable Input Helpers ─────────────────────────────────────────
+
+function getInputText() {
+  let text = '';
+  input.childNodes.forEach(node => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent;
+    } else if (node.classList?.contains('mention-pill')) {
+      text += `@"${node.dataset.tabTitle}" `;
+    } else if (node.nodeName === 'BR') {
+      text += '\n';
+    } else {
+      text += node.innerText || node.textContent || '';
+    }
+  });
+  return text.trim();
+}
+
+function clearInput() {
+  input.innerHTML = '';
+  updateSend();
+}
+
+function setInputPlain(text) {
+  input.innerHTML = '';
+  if (text) {
+    input.appendChild(document.createTextNode(text));
+  }
+  updateSend();
+}
+
+function getMentionedTabs() {
+  const pills = input.querySelectorAll('.mention-pill');
+  const tabs = [];
+  pills.forEach(p => {
+    const id = Number(p.dataset.tabId);
+    const tab = allTabs.find(t => t.id === id) || {
+      id,
+      title: p.dataset.tabTitle,
+      url: p.dataset.tabUrl
+    };
+    tabs.push(tab);
+  });
+
+  // Also include any typed text mentions
+  const textTabs = parseTabMentions(getInputText());
+  textTabs.forEach(t => {
+    if (!tabs.some(existing => existing.id === t.id)) {
+      tabs.push(t);
+    }
+  });
+
+  return tabs;
+}
+
 // ── Send ──────────────────────────────────────────────────────────────────
 
 async function handleSend() {
-  const query = input.value.trim();
+  const query = getInputText();
   if (!query || isLoading || !selectedModel) return;
 
-  input.value = '';
-  input.style.height = 'auto';
+  const mentionedTabs = getMentionedTabs();
+
+  clearInput();
   hideAutocomplete();
   document.getElementById('welcome')?.remove();
 
@@ -217,20 +329,16 @@ async function handleSend() {
   updateSend();
 
   if (agentMode) {
-    // ── Agent mode ──
     startAgent(messageId, query);
     chrome.runtime.sendMessage({ action: 'agentTask', data: { task: query, model: selectedModel, messageId } });
     saveHistory();
   } else {
-    // ── Chat mode ──
-    const mentionedTabs = parseTabMentions(query);
     const loadingEl = addThinking();
 
     const streamDone = new Promise((resolve, reject) => {
       activeStreams[messageId] = { loadingEl, el: null, text: '', resolve, reject };
     });
 
-    // Pass last 10 turns as context (excluding the one we just pushed)
     const historyContext = history.slice(-11, -1);
 
     chrome.runtime.sendMessage({
@@ -239,7 +347,7 @@ async function handleSend() {
     });
 
     try { await streamDone; }
-    catch {} // error already shown by streamError handler
+    catch {}
     finally { isLoading = false; updateSend(); }
     saveHistory();
   }
@@ -250,7 +358,7 @@ function startAgent(messageId, task) {
   run.className = 'agent-run';
   run.innerHTML = `
     <div class="msg-avatar" style="background:var(--surface-3)">
-      <svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#3b82f6"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg>
+      <svg width="14" height="14" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#10a37f"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg>
     </div>
     <div class="agent-card">
       <div class="agent-header">
@@ -269,7 +377,86 @@ function startAgent(messageId, task) {
   };
 }
 
-// ── Models ────────────────────────────────────────────────────────────────
+// ── Models & Shelf ────────────────────────────────────────────────────────
+
+function renderModelList(models) {
+  modelList.innerHTML = '';
+  if (modelCountBadge) modelCountBadge.textContent = models.length;
+
+  const ollamaModels = models.filter(m => m.provider === 'ollama');
+  const openrouterModels = models.filter(m => m.provider === 'openrouter');
+
+  function createModelItem(m) {
+    const item = document.createElement('div');
+    item.className = `model-item ${m.name === selectedModel ? 'active' : ''}`;
+    item.innerHTML = `
+      <div class="model-item-meta">
+        <span class="model-item-title" title="${esc(m.name)}">${esc(m.name)}</span>
+        ${m.provider === 'openrouter' ? '<span class="model-provider-tag">Cloud</span>' : ''}
+      </div>
+      ${m.name === selectedModel ? `
+        <span class="model-item-check">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+      ` : ''}
+    `;
+
+    item.addEventListener('click', async () => {
+      selectedModel = m.name;
+      modelSelect.value = m.name;
+      currentModelName.textContent = m.name;
+      await chrome.storage.local.set({ selectedModel });
+      closeModelPopover();
+      renderModelList(models);
+      updateSend();
+    });
+
+    return item;
+  }
+
+  // 1. Ollama Models Section
+  const ollamaSection = document.createElement('div');
+  ollamaSection.className = 'model-section';
+  ollamaSection.innerHTML = `
+    <div class="model-section-header">
+      <span class="model-section-title">Ollama</span>
+      <span class="model-section-badge">Local</span>
+    </div>
+  `;
+  if (ollamaModels.length) {
+    ollamaModels.forEach(m => ollamaSection.appendChild(createModelItem(m)));
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'model-empty-hint';
+    empty.textContent = 'No local Ollama models found. Ensure Ollama is running.';
+    ollamaSection.appendChild(empty);
+  }
+  modelList.appendChild(ollamaSection);
+
+  // 2. OpenRouter Models Section (under Ollama models)
+  const orSection = document.createElement('div');
+  orSection.className = 'model-section';
+  orSection.innerHTML = `
+    <div class="model-section-header">
+      <span class="model-section-title">OpenRouter</span>
+      <span class="model-section-badge cloud">Cloud</span>
+    </div>
+  `;
+  if (openrouterModels.length) {
+    openrouterModels.forEach(m => orSection.appendChild(createModelItem(m)));
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'model-empty-hint';
+    empty.innerHTML = `No OpenRouter models connected.<br/><button class="model-configure-link" type="button">Configure in Settings</button>`;
+    empty.querySelector('.model-configure-link')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeModelPopover();
+      chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+    });
+    orSection.appendChild(empty);
+  }
+  modelList.appendChild(orSection);
+}
 
 async function loadModels() {
   try {
@@ -282,6 +469,7 @@ async function loadModels() {
         opt.textContent = m.name;
         modelSelect.appendChild(opt);
       });
+
       const saved = (await chrome.storage.local.get('selectedModel')).selectedModel;
       if (saved && res.models.some(m => m.name === saved)) {
         modelSelect.value = saved;
@@ -290,17 +478,36 @@ async function loadModels() {
         selectedModel = res.models[0].name;
         modelSelect.value = selectedModel;
       }
+
+      currentModelName.textContent = selectedModel;
+      renderModelList(res.models);
     } else {
       modelSelect.innerHTML = '<option>No models</option>';
-      const msg = res?.error || 'Ollama not found';
-      addError(msg.includes('OLLAMA_ORIGINS')
-        ? msg
-        : 'Cannot reach Ollama. Steps to fix:\n1. Make sure Ollama is running: ollama serve\n2. If still failing, restart with: OLLAMA_ORIGINS="*" ollama serve');
+      currentModelName.textContent = 'Select model…';
+      renderModelList([]);
+      if (modelCountBadge) modelCountBadge.textContent = '0';
     }
   } catch (e) {
-    modelSelect.innerHTML = '<option>Ollama offline</option>';
-    addError('Cannot reach Ollama. Make sure it is running: ollama serve');
+    modelSelect.innerHTML = '<option>Offline</option>';
+    currentModelName.textContent = 'Server offline';
+    modelList.innerHTML = '<div class="model-empty">Cannot reach model provider.</div>';
+    if (modelCountBadge) modelCountBadge.textContent = '0';
   }
+}
+
+function toggleModelPopover() {
+  const isOpen = modelPopover.style.display !== 'none';
+  if (isOpen) {
+    closeModelPopover();
+  } else {
+    modelPopover.style.display = 'flex';
+    modelShelf.classList.add('open');
+  }
+}
+
+function closeModelPopover() {
+  modelPopover.style.display = 'none';
+  modelShelf.classList.remove('open');
 }
 
 // ── Connection ────────────────────────────────────────────────────────────
@@ -308,37 +515,15 @@ async function loadModels() {
 async function checkConn() {
   try {
     const { connected } = await chrome.runtime.sendMessage({ action: 'checkConnection' });
-    statusDot.className = `dot ${connected ? 'connected' : 'disconnected'}`;
-    statusText.textContent = connected ? 'Ollama connected' : 'Ollama disconnected';
-    setSetupBanner(!connected);
+    if (statusDot) statusDot.className = `dot ${connected ? 'connected' : 'disconnected'}`;
+    if (statusText) statusText.textContent = connected ? 'Connected' : 'Disconnected';
   } catch {
-    statusDot.className = 'dot disconnected';
-    statusText.textContent = 'Ollama disconnected';
-    setSetupBanner(true);
+    if (statusDot) statusDot.className = 'dot disconnected';
+    if (statusText) statusText.textContent = 'Offline';
   }
 }
 
-function setSetupBanner(show) {
-  const existing = document.getElementById('setup-banner');
-  if (!show) { existing?.remove(); return; }
-  if (existing) return;
-  const banner = document.createElement('div');
-  banner.id = 'setup-banner';
-  banner.innerHTML = `
-    <div class="setup-banner">
-      <strong>Ollama is not running</strong>
-      <p>This extension requires <a href="https://ollama.com" target="_blank">Ollama</a> installed and running on your machine.</p>
-      <ol>
-        <li>Download and install Ollama from <strong>ollama.com</strong></li>
-        <li>Run: <code>OLLAMA_ORIGINS="*" ollama serve</code></li>
-        <li>Pull a model: <code>ollama pull llama3</code></li>
-        <li>Click the reconnect button above</li>
-      </ol>
-    </div>`;
-  chat.prepend(banner);
-}
-
-// ── Tabs & autocomplete ───────────────────────────────────────────────────
+// ── Tabs & Autocomplete with Editable Mention Pills ───────────────────────
 
 async function loadTabs() {
   try {
@@ -359,18 +544,37 @@ function parseTabMentions(text) {
 }
 
 function detectAt() {
-  const text = input.value;
-  const cur = input.selectionStart;
-  let pos = -1;
-  for (let i = cur - 1; i >= 0; i--) {
-    if (text[i] === '@') { pos = i; break; }
-    if (text[i] === ' ' || text[i] === '\n') break;
+  const sel = window.getSelection();
+  if (!sel || !sel.rangeCount) { hideAutocomplete(); return; }
+  const range = sel.getRangeAt(0);
+  const node = range.startContainer;
+  if (node.nodeType !== Node.TEXT_NODE) { hideAutocomplete(); return; }
+
+  const textBefore = node.textContent.slice(0, range.startOffset);
+  const atIdx = textBefore.lastIndexOf('@');
+  if (atIdx === -1) { hideAutocomplete(); return; }
+
+  // Ensure @ is at the start of text or preceded by whitespace
+  if (atIdx > 0 && !/\s/.test(textBefore[atIdx - 1])) {
+    hideAutocomplete();
+    return;
   }
-  if (pos === -1) { hideAutocomplete(); return; }
-  atStart = pos;
-  const q = text.slice(pos + 1, cur).toLowerCase();
-  const hits = allTabs.filter(t => t.title?.toLowerCase().includes(q) || t.url?.toLowerCase().includes(q));
+
+  const query = textBefore.slice(atIdx + 1).toLowerCase();
+  if (query.includes('\n')) { hideAutocomplete(); return; }
+
+  const hits = allTabs.filter(t =>
+    t.title?.toLowerCase().includes(query) || t.url?.toLowerCase().includes(query)
+  );
+
   if (!hits.length) { hideAutocomplete(); return; }
+
+  savedRange = {
+    node,
+    atOffset: atIdx,
+    endOffset: range.startOffset
+  };
+
   showAutocomplete(hits);
 }
 
@@ -383,14 +587,28 @@ function showAutocomplete(tabs) {
     item.dataset.i = i;
     if (tab.favIconUrl) {
       const img = document.createElement('img');
-      img.className = 'tab-favicon'; img.src = tab.favIconUrl;
-      img.width = img.height = 14; img.onerror = () => img.remove();
+      img.className = 'tab-favicon';
+      img.src = tab.favIconUrl;
+      img.width = img.height = 14;
+      img.onerror = () => img.remove();
       item.appendChild(img);
     }
-    const info = document.createElement('div'); info.className = 'tab-info';
-    info.innerHTML = `<div class="tab-title">${esc(tab.title||'Untitled')}</div><div class="tab-url">${esc(tab.url)}</div>`;
+    const info = document.createElement('div');
+    info.className = 'tab-info';
+    info.innerHTML = `<div class="tab-title">${esc(tab.title || 'Untitled')}</div><div class="tab-url">${esc(tab.url)}</div>`;
     item.appendChild(info);
-    item.addEventListener('click', () => { tabIdx = i; selectTab(); });
+
+    // Prevent mousedown from blurring the input field and breaking selection
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+    });
+
+    item.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      insertMentionPill(tab);
+    });
+
     autocompleteList.appendChild(item);
   });
   autocomplete.style.display = 'block';
@@ -398,7 +616,8 @@ function showAutocomplete(tabs) {
 
 function hideAutocomplete() {
   autocomplete.style.display = 'none';
-  tabIdx = -1; atStart = -1;
+  tabIdx = -1;
+  savedRange = null;
 }
 
 function navAutocomplete(dir) {
@@ -410,25 +629,185 @@ function navAutocomplete(dir) {
   items[tabIdx].scrollIntoView({ block: 'nearest' });
 }
 
-function selectTab() {
-  const items = autocompleteList.querySelectorAll('.tab-item');
-  if (tabIdx < 0 || tabIdx >= items.length) return;
-  const title = items[tabIdx].querySelector('.tab-title').textContent;
-  const before = input.value.slice(0, atStart);
-  const after  = input.value.slice(input.selectionStart);
-  input.value = before + `@"${title}" ` + after;
-  input.selectionStart = input.selectionEnd = before.length + title.length + 4;
+function stripTrailingAtBefore(pill) {
+  let prev = pill.previousSibling;
+  while (prev) {
+    if (prev.nodeType === Node.TEXT_NODE) {
+      if (prev.textContent.endsWith('@')) {
+        prev.textContent = prev.textContent.slice(0, -1);
+      } else if (/@\s*$/.test(prev.textContent)) {
+        prev.textContent = prev.textContent.replace(/@\s*$/, '');
+      }
+      break;
+    } else if (prev.classList?.contains('mention-pill')) {
+      break;
+    }
+    prev = prev.previousSibling;
+  }
+}
+
+function cleanAllStrayAts() {
+  const pills = input.querySelectorAll('.mention-pill');
+  pills.forEach(p => stripTrailingAtBefore(p));
+}
+
+function insertMentionPill(tab) {
+  const rangeInfo = savedRange;
   hideAutocomplete();
+
+  const pill = document.createElement('span');
+  pill.className = 'mention-pill';
+  pill.contentEditable = 'false';
+  pill.dataset.tabId = tab.id;
+  pill.dataset.tabTitle = tab.title || 'Untitled';
+  pill.dataset.tabUrl = tab.url || '';
+  pill.innerHTML = `
+    <span class="pill-at">@</span>
+    <span class="pill-title">${esc(tab.title || 'Untitled')}</span>
+    <button class="pill-remove" type="button" tabindex="-1" title="Remove">×</button>
+  `;
+
+  pill.querySelector('.pill-remove').addEventListener('click', (e) => {
+    e.stopPropagation();
+    pill.remove();
+    updateSend();
+    input.focus();
+  });
+
+  const space = document.createTextNode('\u00A0');
+  const sel = window.getSelection();
+  let inserted = false;
+
+  if (rangeInfo && rangeInfo.node && rangeInfo.node.parentNode) {
+    try {
+      const r = document.createRange();
+      r.setStart(rangeInfo.node, rangeInfo.atOffset);
+      r.setEnd(rangeInfo.node, rangeInfo.endOffset);
+      r.deleteContents();
+      r.insertNode(space);
+      r.insertNode(pill);
+
+      const caretRange = document.createRange();
+      caretRange.setStartAfter(space);
+      caretRange.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(caretRange);
+      inserted = true;
+    } catch (err) {
+      console.warn('Range insertion error, falling back:', err);
+    }
+  }
+
+  if (!inserted) {
+    cleanTrailingAt();
+    input.appendChild(pill);
+    input.appendChild(space);
+    const caretRange = document.createRange();
+    caretRange.setStartAfter(space);
+    caretRange.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(caretRange);
+  }
+
+  // Ensure absolutely no stray @ remains in preceding text nodes
+  stripTrailingAtBefore(pill);
+  cleanAllStrayAts();
+
+  savedRange = null;
   input.focus();
   updateSend();
 }
 
-// ── Input ─────────────────────────────────────────────────────────────────
+function cleanTrailingAt() {
+  for (let i = input.childNodes.length - 1; i >= 0; i--) {
+    const child = input.childNodes[i];
+    if (child.nodeType === Node.TEXT_NODE) {
+      const m = child.textContent.match(/@([a-zA-Z0-9_\-\s]*)$/);
+      if (m) {
+        child.textContent = child.textContent.slice(0, child.textContent.length - m[0].length);
+        break;
+      }
+    }
+  }
+}
+
+// ── Voice Dictation ───────────────────────────────────────────────────────
+
+function initSpeechRecognition() {
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) return null;
+
+  const rec = new SpeechRec();
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = 'en-US';
+
+  rec.onstart = () => {
+    isRecording = true;
+    dictateBtn.classList.add('recording');
+    dictateBtn.title = 'Listening… click to finish';
+  };
+
+  rec.onresult = event => {
+    let finalTranscript = '';
+    for (let i = event.resultIndex; i < event.results.length; ++i) {
+      if (event.results[i].isFinal) {
+        finalTranscript += event.results[i][0].transcript;
+      }
+    }
+    if (finalTranscript) {
+      const space = input.textContent.length ? ' ' : '';
+      input.appendChild(document.createTextNode(space + finalTranscript.trim()));
+      updateSend();
+    }
+  };
+
+  rec.onerror = event => {
+    console.warn('Speech recognition error:', event.error);
+    stopRecording();
+  };
+
+  rec.onend = () => {
+    stopRecording();
+  };
+
+  return rec;
+}
+
+function toggleDictation() {
+  if (!speechRec) {
+    speechRec = initSpeechRecognition();
+  }
+
+  if (!speechRec) {
+    addError('Speech recognition is not supported in this browser.');
+    return;
+  }
+
+  if (isRecording) {
+    stopRecording();
+  } else {
+    try {
+      speechRec.start();
+    } catch (e) {
+      console.warn('Error starting speech recognition:', e);
+      stopRecording();
+    }
+  }
+}
+
+function stopRecording() {
+  isRecording = false;
+  dictateBtn.classList.remove('recording');
+  dictateBtn.title = 'Dictate message';
+  try { speechRec?.stop(); } catch {}
+}
+
+// ── Input Event Handlers ──────────────────────────────────────────────────
 
 function updateSend() {
-  sendBtn.disabled = !input.value.trim() || !selectedModel || isLoading;
-  input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  const text = getInputText();
+  sendBtn.disabled = !text || !selectedModel || isLoading;
   detectAt();
 }
 
@@ -438,50 +817,82 @@ input.addEventListener('keydown', e => {
   if (autocomplete.style.display !== 'none') {
     if (e.key === 'ArrowDown')  { e.preventDefault(); navAutocomplete(1); return; }
     if (e.key === 'ArrowUp')    { e.preventDefault(); navAutocomplete(-1); return; }
-    if (e.key === 'Tab')        { e.preventDefault(); selectTab(); return; }
-    if (e.key === 'Enter' && tabIdx >= 0) { e.preventDefault(); selectTab(); return; }
+    if (e.key === 'Tab' || e.key === 'Enter') {
+      e.preventDefault();
+      const items = autocompleteList.querySelectorAll('.tab-item');
+      if (tabIdx >= 0 && items[tabIdx]) {
+        items[tabIdx].click();
+      } else if (items.length) {
+        items[0].click();
+      }
+      return;
+    }
     if (e.key === 'Escape')     { hideAutocomplete(); return; }
   }
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!sendBtn.disabled) handleSend(); }
+
+  // Atomic Backspace for mention pills
+  if (e.key === 'Backspace') {
+    const sel = window.getSelection();
+    if (sel && sel.isCollapsed && sel.rangeCount) {
+      const range = sel.getRangeAt(0);
+      if (range.startOffset === 0) {
+        const prev = range.startContainer.previousSibling;
+        if (prev?.classList?.contains('mention-pill')) {
+          e.preventDefault();
+          prev.remove();
+          updateSend();
+          return;
+        }
+      }
+    }
+  }
+
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (!sendBtn.disabled) handleSend();
+  }
+});
+
+// Paste plain text only into contenteditable
+input.addEventListener('paste', e => {
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+  document.execCommand('insertText', false, text);
+  updateSend();
 });
 
 sendBtn.addEventListener('click', handleSend);
 
-// ── New chat ──────────────────────────────────────────────────────────────
+// ── New Chat ──────────────────────────────────────────────────────────────
 
 async function newChat() {
   history = [];
   await chrome.storage.local.remove('chatHistory');
   chat.innerHTML = '';
   const welcome = document.createElement('div');
-  welcome.id = 'welcome'; welcome.className = 'welcome';
+  welcome.id = 'welcome';
+  welcome.className = 'welcome';
   welcome.innerHTML = `
-    <div class="welcome-logo"><svg width="40" height="40" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#3b82f6"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg></div>
-    <h2 class="welcome-title">Local-Agent Ollama</h2>
-    <p class="welcome-desc">Chat, summarize pages, or reference any open tab with <code>@tabname</code>. Powered by Ollama — fully private, runs on your machine.</p>
+    <h2 class="welcome-title">How can I help you today?</h2>
+    <p class="welcome-desc">Chat, navigate web tasks, or reference open tabs with <code>@tabname</code>. Fully private and customizable.</p>
     <div class="suggestions">
-      <button class="suggestion" data-q='Summarize @"'>Summarize a tab</button>
-      <button class="suggestion" data-q='What are the key points in @"'>Key points</button>
-      <button class="suggestion" data-q='Explain @"'>Explain this page</button>
+      <button class="suggestion" data-q="Summarize @">Summarize a tab</button>
+      <button class="suggestion" data-q="What are the key points in @">Key points</button>
+      <button class="suggestion" data-q="Explain @">Explain this page</button>
     </div>`;
   chat.appendChild(welcome);
-  welcome.querySelectorAll('.suggestion').forEach(btn => {
-    btn.addEventListener('click', () => { input.value = btn.dataset.q; input.focus(); input.selectionStart = input.selectionEnd = input.value.length; updateSend(); });
-  });
-  input.value = ''; updateSend();
+  attachSuggestionListeners(welcome);
+  clearInput();
 }
 
-// ── Export ────────────────────────────────────────────────────────────────
-
-function exportChat() {
-  if (!history.length) return;
-  let out = '# Local-Agent Ollama Conversation\n\n';
-  history.forEach(m => {
-    out += `**${m.role === 'user' ? 'You' : 'Agent'}** _(${new Date(m.timestamp).toLocaleString()})_\n\n${m.text}\n\n---\n\n`;
+function attachSuggestionListeners(parent) {
+  parent.querySelectorAll('.suggestion').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setInputPlain(btn.dataset.q);
+      input.focus();
+      updateSend();
+    });
   });
-  const url = URL.createObjectURL(new Blob([out], { type: 'text/markdown' }));
-  Object.assign(document.createElement('a'), { href: url, download: `local-agent-${Date.now()}.md` }).click();
-  URL.revokeObjectURL(url);
 }
 
 // ── History ───────────────────────────────────────────────────────────────
@@ -505,44 +916,68 @@ async function loadHistory() {
 // ── Boot ──────────────────────────────────────────────────────────────────
 
 async function init() {
-  // Theme
+  // Theme toggle
   document.getElementById('theme-btn').addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-mode') === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-mode', next);
     localStorage.setItem('la-theme', next);
   });
 
-  // New chat
+  // Top toolbar buttons
   document.getElementById('new-chat-btn').addEventListener('click', newChat);
 
-  // Export
-  document.getElementById('export-btn').addEventListener('click', exportChat);
+  // Settings: open full settings page in a tab
+  settingsBtn.addEventListener('click', () => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('settings.html') });
+  });
 
-  // Agent mode
+  // Agent mode switcher
   agentBtn.addEventListener('click', () => {
     agentMode = !agentMode;
     agentBtn.classList.toggle('active', agentMode);
-    input.placeholder = agentMode ? 'Describe a task for the agent…' : 'Ask anything…';
+    agentBtnText.textContent = agentMode ? 'Agent' : 'Chat';
+    input.dataset.placeholder = agentMode ? 'Describe a task for the agent…' : 'Ask anything…';
   });
 
-  // Model change
-  modelSelect.addEventListener('change', async () => {
-    selectedModel = modelSelect.value;
-    await chrome.storage.local.set({ selectedModel });
+  // Dictation button
+  dictateBtn.addEventListener('click', toggleDictation);
+
+  // Model Shelf toggle
+  modelShelf.addEventListener('click', toggleModelPopover);
+  modelShelf.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleModelPopover();
+    }
   });
 
-  // Reconnect
-  document.getElementById('reconnect-btn').addEventListener('click', async () => {
-    statusDot.className = 'dot connecting';
-    statusText.textContent = 'Reconnecting…';
-    await checkConn();
+  refreshModelsBtn.addEventListener('click', async e => {
+    e.stopPropagation();
+    refreshModelsBtn.style.transform = 'rotate(180deg)';
     await loadModels();
+    setTimeout(() => { refreshModelsBtn.style.transform = ''; }, 300);
   });
 
-  // Suggestion buttons
-  document.querySelectorAll('.suggestion').forEach(btn => {
-    btn.addEventListener('click', () => { input.value = btn.dataset.q; input.focus(); input.selectionStart = input.selectionEnd = input.value.length; updateSend(); });
+  // Dismiss model popover on click outside
+  document.addEventListener('click', e => {
+    if (!modelShelf.contains(e.target) && !modelPopover.contains(e.target)) {
+      closeModelPopover();
+    }
   });
+
+  // Reconnect button (if present)
+  const reconnectBtn = document.getElementById('reconnect-btn');
+  if (reconnectBtn) {
+    reconnectBtn.addEventListener('click', async () => {
+      if (statusDot) statusDot.className = 'dot connecting';
+      if (statusText) statusText.textContent = 'Connecting…';
+      await checkConn();
+      await loadModels();
+    });
+  }
+
+  // Initial welcome suggestion buttons
+  attachSuggestionListeners(document);
 
   await loadTabs();
   setInterval(loadTabs, 10000);

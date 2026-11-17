@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en" data-mode="dark">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Settings — Local-Agent Ollama</title>
+  <link rel="icon" href="/lao_icon.svg"/>
+  <link rel="stylesheet" href="/settings.css"/>
+  <script src="/theme-init.js"></script>
+</head>
+<body>
+<div class="settings-app">
+
+  <!-- Top Actions (no header bar, theme toggle in top right) -->
+  <div class="top-actions">
+    <button id="theme-btn" class="top-icon-btn" title="Toggle light/dark theme" aria-label="Toggle theme">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10v8c2.21 0 4-1.79 4-4s-1.79-4-4-4z"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Main Settings Container -->
+  <main class="settings-main">
+    <div class="settings-wrapper">
+
+      <!-- Section: LLM Connections -->
+      <section class="settings-card">
+        <div class="card-header">
+          <div class="card-title-group">
+            <h2>Model Providers</h2>
+            <p class="card-subtitle">Configure local Ollama and cloud OpenRouter connections to power Chat and Agent tasks.</p>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <!-- Active Provider Selector -->
+          <div class="setting-row">
+            <div class="setting-meta">
+              <label class="setting-title">Primary Provider</label>
+              <p class="setting-desc">Choose which engine is prioritized for chat and agent execution.</p>
+            </div>
+            <div class="provider-radio-group">
+              <label class="radio-chip">
+                <input type="radio" name="activeProvider" value="ollama" checked id="provider-ollama"/>
+                <span class="chip-label">Ollama (Local)</span>
+              </label>
+              <label class="radio-chip">
+                <input type="radio" name="activeProvider" value="openrouter" id="provider-openrouter"/>
+                <span class="chip-label">OpenRouter (Cloud)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Ollama Configuration -->
+          <div class="provider-block">
+            <div class="block-header">
+              <div class="block-title-row">
+                <span class="provider-badge local">Ollama</span>
+                <span class="block-title">Local Inference Engine</span>
+              </div>
+              <div id="ollama-status-badge" class="status-indicator">
+                <span class="status-dot"></span>
+                <span class="status-text">Checking…</span>
+              </div>
+            </div>
+
+            <div class="field-grid">
+              <div class="field-group">
+                <label for="ollama-host" class="field-label">Server Endpoint</label>
+                <div class="input-with-action">
+                  <input type="url" id="ollama-host" placeholder="http://127.0.0.1:11434" spellcheck="false" value="http://127.0.0.1:11434"/>
+                  <button id="test-ollama-btn" class="action-btn" type="button">Test</button>
+                </div>
+                <span class="field-hint">Default is http://127.0.0.1:11434. Requires <code>OLLAMA_ORIGINS="*"</code> when running Ollama.</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- OpenRouter Configuration -->
+          <div class="provider-block">
+            <div class="block-header">
+              <div class="block-title-row">
+                <span class="provider-badge cloud">OpenRouter</span>
+                <span class="block-title">Cloud Models & Frontier APIs</span>
+              </div>
+              <label class="switch" title="Enable or disable OpenRouter">
+                <input type="checkbox" id="openrouter-enabled"/>
+                <span class="slider round"></span>
+              </label>
+            </div>
+
+            <div id="openrouter-fields" class="field-grid">
+              <div class="field-group">
+                <label for="openrouter-key" class="field-label">OpenRouter API Key</label>
+                <div class="input-with-action">
+                  <input type="password" id="openrouter-key" placeholder="sk-or-v1-..." spellcheck="false"/>
+                  <button id="toggle-key-btn" class="icon-subtle-btn" type="button" title="Show / Hide Key">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                  </button>
+                  <button id="verify-openrouter-btn" class="action-btn" type="button">Verify</button>
+                </div>
+                <span class="field-hint">Get an API key from <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a>. Keys are stored locally on your device.</span>
+              </div>
+
+              <div class="field-group">
+                <label for="openrouter-model" class="field-label">OpenRouter Model</label>
+                <div class="input-with-action">
+                  <input type="text" id="openrouter-model" placeholder="e.g. anthropic/claude-3.5-sonnet" value="anthropic/claude-3.5-sonnet" list="preset-models" spellcheck="false"/>
+                  <button id="add-openrouter-model-btn" class="action-btn" type="button">Add</button>
+                </div>
+                <datalist id="preset-models">
+                  <option value="anthropic/claude-3.5-sonnet">Claude 3.5 Sonnet</option>
+                  <option value="openai/gpt-4o">GPT-4o</option>
+                  <option value="google/gemini-2.0-flash-exp:free">Gemini 2.0 Flash (Free)</option>
+                  <option value="meta-llama/llama-3.3-70b-instruct">Llama 3.3 70B</option>
+                  <option value="deepseek/deepseek-chat">DeepSeek V3</option>
+                  <option value="mistralai/mistral-large-2407">Mistral Large</option>
+                </datalist>
+                <div id="add-model-status" class="model-status-text" style="display:none;"></div>
+                <span class="field-hint">Specify any model identifier supported by OpenRouter and click Add to verify connection.</span>
+
+                <!-- Connected OpenRouter Models -->
+                <div id="openrouter-models-container" class="connected-models-container" style="display:none;">
+                  <span class="connected-models-label">Connected Models:</span>
+                  <div id="openrouter-models-list" class="connected-models-list"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Section: Agentic Controls -->
+      <section class="settings-card">
+        <div class="card-header">
+          <div class="card-title-group">
+            <h2>Agentic Controls</h2>
+            <p class="card-subtitle">Configure step boundaries and continuation behavior during multi-step browser tasks.</p>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <!-- Max Steps Limit -->
+          <div class="setting-row">
+            <div class="setting-meta">
+              <label for="max-steps-input" class="setting-title">Maximum Steps Per Run</label>
+              <p class="setting-desc">The number of sequential actions the agent performs before requesting your confirmation to continue.</p>
+            </div>
+            <div class="stepper-group">
+              <input type="range" id="max-steps-slider" min="5" max="60" step="5" value="20"/>
+              <span id="max-steps-display" class="step-count-pill">20 steps</span>
+            </div>
+          </div>
+
+          <!-- Step Limit Behavior -->
+          <div class="setting-row">
+            <div class="setting-meta">
+              <span class="setting-title">Step Limit Policy</span>
+              <p class="setting-desc">When the maximum step count is reached during an active agent workflow:</p>
+            </div>
+            <div class="policy-chip-group">
+              <div class="policy-chip active">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                <span>Ask whether to continue or end task</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step Batch Size -->
+          <div class="setting-row">
+            <div class="setting-meta">
+              <label for="step-increment" class="setting-title">Continuation Batch Size</label>
+              <p class="setting-desc">How many additional steps to authorize when clicking "Continue" in chat.</p>
+            </div>
+            <select id="step-increment" class="select-clean">
+              <option value="5">+5 steps</option>
+              <option value="10" selected>+10 steps</option>
+              <option value="15">+15 steps</option>
+              <option value="20">+20 steps</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section: Conversation & Data -->
+      <section class="settings-card">
+        <div class="card-header">
+          <div class="card-title-group">
+            <h2>Data & Conversation</h2>
+            <p class="card-subtitle">Manage local storage and message archives.</p>
+          </div>
+        </div>
+
+        <div class="card-body">
+          <div class="setting-row">
+            <div class="setting-meta">
+              <span class="setting-title">Export Conversation</span>
+              <p class="setting-desc">Download your active chat history as a Markdown (.md) document.</p>
+            </div>
+            <button id="export-history-btn" class="action-btn secondary" type="button">Export .md</button>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-meta">
+              <span class="setting-title">Clear All History</span>
+              <p class="setting-desc">Permanently erase stored conversation turns and reset session state.</p>
+            </div>
+            <button id="clear-history-btn" class="action-btn danger" type="button">Clear History</button>
+          </div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Bottom Floating Notification / Toast -->
+  <div id="toast" class="toast" style="display:none">
+    <span id="toast-msg">Settings saved</span>
+  </div>
+
+</div>
+<script src="/settings.js"></script>
+</body>
+</html>
