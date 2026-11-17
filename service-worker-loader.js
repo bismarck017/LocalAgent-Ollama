@@ -1,24 +1,32 @@
 // Local-Agent Ollama — background service worker
 // (loaded as module for Chrome compatibility with cached registration)
 
-// Try localhost first, fall back to 127.0.0.1 (some systems resolve differently)
-let OLLAMA = 'http://localhost:11434';
+let OLLAMA = 'http://127.0.0.1:11434';
+const pendingAgentDecisions = {};
 
-async function findOllama() {
+async function getOllamaHost() {
+  const { ollamaHost } = await chrome.storage.local.get('ollamaHost');
+  if (ollamaHost) {
+    OLLAMA = ollamaHost.replace(/\/+$/, '');
+    return OLLAMA;
+  }
   for (const base of ['http://localhost:11434', 'http://127.0.0.1:11434']) {
     try {
       const r = await fetch(`${base}/api/tags`);
       if (r.ok) { OLLAMA = base; return base; }
     } catch {}
   }
-  return null;
+  return OLLAMA;
+}
+
+async function findOllama() {
+  return getOllamaHost();
 }
 
 // ── Ollama helpers ────────────────────────────────────────────────────────
 
 async function ollamaModels() {
-  const base = await findOllama();
-  if (!base) throw new Error('Ollama not reachable. Make sure it is running:\n  ollama serve\n\nIf it is running, restart it with:\n  OLLAMA_ORIGINS="*" ollama serve');
+  const base = await getOllamaHost();
   const r = await fetch(`${base}/api/tags`);
   if (!r.ok) throw new Error(`Ollama ${r.status}`);
   const d = await r.json();
@@ -26,18 +34,24 @@ async function ollamaModels() {
 }
 
 async function ollamaPing() {
-  const base = await findOllama();
-  return base !== null;
+  try {
+    const base = await getOllamaHost();
+    const r = await fetch(`${base}/api/tags`);
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
 function ollamaError(status) {
-  if (status === 403) return `Ollama blocked the request (403).\n\nOllama rejects requests from browser extensions by default.\nFix: quit Ollama, then run it with:\n\n  OLLAMA_ORIGINS="*" ollama serve\n\nOr set it permanently:\n  launchctl setenv OLLAMA_ORIGINS "*"  (then restart Ollama)`;
+  if (status === 403) return `Ollama blocked the request (403).\n\nFix: quit Ollama, then run it with:\n\n  OLLAMA_ORIGINS="*" ollama serve\n\nOr set it permanently in terminal and restart Ollama.`;
   return `Ollama returned ${status}`;
 }
 
-/** Streaming chat — calls onChunk(token) for each piece, returns full text. */
+/** Streaming chat with Ollama */
 async function ollamaChat(model, messages, onChunk) {
-  const r = await fetch(`${OLLAMA}/api/chat`, {
+  const base = await getOllamaHost();
+  const r = await fetch(`${base}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model, messages, stream: true })
@@ -64,16 +78,49 @@ async function ollamaChat(model, messages, onChunk) {
   return full;
 }
 
-/** Non-streaming single call for agent steps. */
-async function ollamaOnce(model, messages) {
-  const r = await fetch(`${OLLAMA}/api/chat`, {
+// ── OpenRouter helpers ────────────────────────────────────────────────────
+
+async function openrouterChat(model, messages, onChunk, apiKey) {
+  const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages, stream: false })
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+      'HTTP-Referer': 'https://localagent-ollama',
+      'X-Title': 'LocalAgent Ollama'
+    },
+    body: JSON.stringify({ model, messages, stream: true })
   });
-  if (!r.ok) throw new Error(ollamaError(r.status));
-  const d = await r.json();
-  return d.message?.content?.trim() || '';
+
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    throw new Error(err.error?.message || `OpenRouter returned ${r.status}`);
+  }
+
+  const reader = r.body.getReader();
+  const dec = new TextDecoder();
+  let full = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const lines = dec.decode(value).split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed || !trimmed.startsWith('data:')) continue;
+      const dataStr = trimmed.slice(5).trim();
+      if (dataStr === '[DONE]') return full;
+      try {
+        const d = JSON.parse(dataStr);
+        const token = d.choices?.[0]?.delta?.content || '';
+        if (token) {
+          full += token;
+          onChunk?.(token);
+        }
+      } catch {}
+    }
+  }
+  return full;
 }
 
 // ── Tab helpers ───────────────────────────────────────────────────────────
@@ -98,7 +145,7 @@ async function extractTab(tabId) {
       return `Title: ${res.data.title}\nURL: ${res.data.url}\n\n${res.data.content}`;
   } catch {}
 
-  // Fallback: inject extraction script directly (works even if content script not loaded)
+  // Fallback: inject extraction script
   try {
     const results = await chrome.scripting.executeScript({
       target: { tabId },
@@ -118,29 +165,62 @@ async function extractTab(tabId) {
       return `Title: ${data.title}\nURL: ${data.url}\n\n${data.content}`;
   } catch {}
 
-  // Last fallback: fetch directly
+  return '[Could not extract page content]';
+}
+
+// ── Model Aggregator ──────────────────────────────────────────────────────
+
+async function getAllAvailableModels() {
+  const models = [];
+
+  // 1. Ollama models
   try {
-    const res = await fetch(url);
-    if (!res.ok) return '[Could not fetch page]';
-    let html = await res.text();
-    html = html
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<nav[\s\S]*?<\/nav>/gi, '')
-      .replace(/<header[\s\S]*?<\/header>/gi, '')
-      .replace(/<footer[\s\S]*?<\/footer>/gi, '')
-      .replace(/<h([1-6])[^>]*>([\s\S]*?)<\/h\1>/gi, '\n$2\n')
-      .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '\n$1\n')
-      .replace(/<li[^>]*>([\s\S]*?)<\/li>/gi, '\n• $1')
-      .replace(/<br\s*\/?>/gi, '\n')
-      .replace(/<[^>]+>/g, '')
-      .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"')
-      .replace(/\n{3,}/g, '\n\n').trim();
-    if (html.length > 8000) html = html.slice(0, 8000) + '\n[…truncated]';
-    if (html.length > 200) return `Title: ${tab.title}\nURL: ${url}\n\n${html}`;
+    const oModels = await ollamaModels();
+    oModels.forEach(m => {
+      models.push({
+        name: m.name,
+        provider: 'ollama',
+        size: m.size ? `${(m.size / (1024 * 1024 * 1024)).toFixed(1)}GB` : ''
+      });
+    });
   } catch {}
 
-  return '[Could not extract page content]';
+  // 2. OpenRouter models
+  try {
+    const { openrouterEnabled, openrouterApiKey, openrouterModel, openrouterModels } = await chrome.storage.local.get([
+      'openrouterEnabled',
+      'openrouterApiKey',
+      'openrouterModel',
+      'openrouterModels'
+    ]);
+
+    if (openrouterEnabled && openrouterApiKey) {
+      const orList = Array.isArray(openrouterModels) && openrouterModels.length
+        ? [...openrouterModels]
+        : [];
+
+      if (openrouterModel && !orList.includes(openrouterModel)) {
+        orList.unshift(openrouterModel);
+      }
+
+      // Default presets if user has not added any custom models yet
+      if (!orList.length) {
+        orList.push(
+          'anthropic/claude-3.5-sonnet',
+          'openai/gpt-4o',
+          'google/gemini-2.0-flash-exp:free'
+        );
+      }
+
+      orList.forEach(name => {
+        if (!models.some(m => m.name === name && m.provider === 'openrouter')) {
+          models.push({ name, provider: 'openrouter', size: 'Cloud' });
+        }
+      });
+    }
+  } catch {}
+
+  return models;
 }
 
 // ── Message routing ───────────────────────────────────────────────────────
@@ -148,9 +228,9 @@ async function extractTab(tabId) {
 chrome.runtime.onMessage.addListener((req, _sender, respond) => {
 
   if (req.action === 'getModels') {
-    ollamaModels()
+    getAllAvailableModels()
       .then(models => respond({ success: true, models }))
-      .catch(e => respond({ success: false, error: e.message }));
+      .catch(e => respond({ success: false, error: e.message, models: [] }));
     return true;
   }
 
@@ -179,6 +259,16 @@ chrome.runtime.onMessage.addListener((req, _sender, respond) => {
     respond({ success: true });
     return true;
   }
+
+  if (req.action === 'agentDecision') {
+    const resolver = pendingAgentDecisions[req.messageId];
+    if (resolver) {
+      resolver(req);
+      delete pendingAgentDecisions[req.messageId];
+    }
+    respond({ success: true });
+    return true;
+  }
 });
 
 // ── Streaming chat handler ────────────────────────────────────────────────
@@ -190,7 +280,6 @@ async function handleStreamQuery(data) {
     chrome.runtime.sendMessage({ action, messageId, ...extra }).catch(() => {});
 
   try {
-    // Build system + context
     let system = 'You are a helpful assistant.';
     let userContent = query;
 
@@ -201,20 +290,34 @@ async function handleStreamQuery(data) {
       userContent = `${ctx}\n\n---\nQuestion: ${query}`;
     }
 
-    // Build messages array with conversation history
     const messages = [{ role: 'system', content: system }];
     for (const h of history) {
       messages.push({ role: h.role === 'user' ? 'user' : 'assistant', content: h.text });
     }
     messages.push({ role: 'user', content: userContent });
 
-    let full = '';
-    await ollamaChat(model, messages, token => {
-      full += token;
-      send('streamChunk', { chunk: token, fullText: full });
-    });
+    const { openrouterEnabled, openrouterApiKey } = await chrome.storage.local.get([
+      'openrouterEnabled',
+      'openrouterApiKey'
+    ]);
 
-    send('streamComplete', { text: full });
+    const isOpenRouter = (model && model.includes('/')) || (openrouterEnabled && !model.includes(':'));
+
+    if (isOpenRouter && openrouterApiKey) {
+      let full = '';
+      await openrouterChat(model, messages, token => {
+        full += token;
+        send('streamChunk', { chunk: token, fullText: full });
+      }, openrouterApiKey);
+      send('streamComplete', { text: full });
+    } else {
+      let full = '';
+      await ollamaChat(model, messages, token => {
+        full += token;
+        send('streamChunk', { chunk: token, fullText: full });
+      });
+      send('streamComplete', { text: full });
+    }
   } catch (e) {
     send('streamError', { error: e.message });
   }
@@ -268,20 +371,59 @@ async function waitLoad(tabId, ms = 8000) {
   }
 }
 
-// ── Agent tool definitions ────────────────────────────────────────────────
-
 const agentTools = [
-  { type: 'function', function: { name: 'click',    description: 'Click an element on the page',                                   parameters: { type: 'object', properties: { refId: { type: 'string', description: 'ref ID from the page listing, e.g. ref_3' } }, required: ['refId'] } } },
-  { type: 'function', function: { name: 'type',     description: 'Type text into an input, textarea, or contenteditable element',   parameters: { type: 'object', properties: { refId: { type: 'string' }, text: { type: 'string' } }, required: ['refId', 'text'] } } },
-  { type: 'function', function: { name: 'key',      description: 'Press a keyboard key, e.g. Enter to submit a form',              parameters: { type: 'object', properties: { key: { type: 'string', description: 'Key name: Enter, Tab, Escape, ArrowDown, etc.' } }, required: ['key'] } } },
-  { type: 'function', function: { name: 'scroll',   description: 'Scroll the page up or down',                                     parameters: { type: 'object', properties: { direction: { type: 'string', enum: ['up', 'down'] } }, required: ['direction'] } } },
-  { type: 'function', function: { name: 'navigate', description: 'Navigate to a URL',                                              parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
-  { type: 'function', function: { name: 'read',     description: 'Read the visible text content of the current page — use this to find information displayed on the page such as weather, prices, search results, article text, etc.',  parameters: { type: 'object', properties: {} } } },
-  { type: 'function', function: { name: 'done',     description: 'Task complete — return the final answer',                        parameters: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'] } } }
+  { type: 'function', function: { name: 'click',    description: 'Click an element on the page', parameters: { type: 'object', properties: { refId: { type: 'string', description: 'ref ID from page, e.g. ref_3' } }, required: ['refId'] } } },
+  { type: 'function', function: { name: 'type',     description: 'Type text into an input or textarea', parameters: { type: 'object', properties: { refId: { type: 'string' }, text: { type: 'string' } }, required: ['refId', 'text'] } } },
+  { type: 'function', function: { name: 'key',      description: 'Press a keyboard key (Enter, Tab, Escape, etc.)', parameters: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'] } } },
+  { type: 'function', function: { name: 'scroll',   description: 'Scroll up or down', parameters: { type: 'object', properties: { direction: { type: 'string', enum: ['up', 'down'] } }, required: ['direction'] } } },
+  { type: 'function', function: { name: 'navigate', description: 'Navigate to a URL', parameters: { type: 'object', properties: { url: { type: 'string' } }, required: ['url'] } } },
+  { type: 'function', function: { name: 'read',     description: 'Read the visible text content of the page', parameters: { type: 'object', properties: {} } } },
+  { type: 'function', function: { name: 'done',     description: 'Task complete — return final answer', parameters: { type: 'object', properties: { result: { type: 'string' } }, required: ['result'] } } }
 ];
 
+async function callAgentLLM(model, messages) {
+  const { openrouterEnabled, openrouterApiKey } = await chrome.storage.local.get([
+    'openrouterEnabled',
+    'openrouterApiKey'
+  ]);
+
+  const isOpenRouter = (model && model.includes('/')) || (openrouterEnabled && !model.includes(':'));
+
+  if (isOpenRouter && openrouterApiKey) {
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openrouterApiKey}`,
+        'HTTP-Referer': 'https://localagent-ollama',
+        'X-Title': 'LocalAgent Ollama'
+      },
+      body: JSON.stringify({ model, messages, tools: agentTools, stream: false })
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      throw new Error(err.error?.message || `OpenRouter ${r.status}`);
+    }
+    const data = await r.json();
+    return data.choices?.[0]?.message;
+  } else {
+    const base = await getOllamaHost();
+    const r = await fetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, messages, tools: agentTools, stream: false })
+    });
+    if (!r.ok) throw new Error(ollamaError(r.status));
+    return (await r.json()).message;
+  }
+}
+
 async function handleAgentTask(data) {
-  const { task, model, messageId, maxSteps = 20 } = data;
+  const { task, model, messageId } = data;
+
+  const storageData = await chrome.storage.local.get(['maxSteps', 'stepIncrement']);
+  let maxSteps = Number(storageData.maxSteps) || 20;
+  const defaultIncrement = Number(storageData.stepIncrement) || 10;
 
   const step = (type, content) =>
     chrome.runtime.sendMessage({ action: 'agentStep', messageId, type, content }).catch(() => {});
@@ -292,42 +434,59 @@ async function handleAgentTask(data) {
   if (!activeTab?.id) { done('No active tab found.'); return; }
   const tabId = activeTab.id;
 
-  // Seed the conversation with the initial page state
   const tree = await getTree(tabId);
   const snippet = tree.length > 3500 ? tree.slice(0, 3500) + '\n…[truncated]' : tree;
 
-  // Persistent thread — grows with every action + result, just like Claude
   const messages = [
     { role: 'system', content: `You are a browser automation agent. Use the provided tools to complete tasks step by step. Call done() when you have the final answer.
 
 Rules:
-- Ref IDs (ref_0, ref_1, …) change after every action. Never reuse a ref from a previous step — always read the current page state and find the correct ref by its LABEL.
-- To use a field: find the element whose label matches what you want (e.g. label "To", "Subject", "Message Body"), then use that ref.
-- After clicking a button that opens a dialog or modal, wait for the updated page state and look for new fields by their labels before acting.
-- Elements marked [editable] or role=textbox are typeable — use the type tool on them.
-- Never scroll when form fields are visible. Never navigate away from a page mid-task unless required.
-- To submit a form: click the Send/Submit button by its label, or press Enter.
-- After navigating to a page where you need to read information (weather, search results, prices, articles), call read() to get the page text, then call done() with the answer.` },
+- Ref IDs change after every action. Never reuse an old ref ID.
+- Elements marked [editable] or role=textbox are typeable.
+- After navigating to read information, call read(), then call done() with the answer.` },
     { role: 'user', content: `TASK: ${task}\n\nCURRENT PAGE:\n${snippet}` }
   ];
 
-  for (let i = 1; i <= maxSteps; i++) {
-    step('thinking', `Step ${i}…`);
+  let i = 1;
+  while (true) {
+    // Check if maxSteps limit reached — ask user rather than auto-terminating!
+    if (i > maxSteps) {
+      step('thinking', `Reached step limit (${maxSteps} steps).`);
+      chrome.runtime.sendMessage({
+        action: 'agentMaxStepsReached',
+        messageId,
+        currentSteps: i - 1,
+        maxSteps,
+        suggestedIncrement: defaultIncrement
+      }).catch(() => {});
+
+      const userChoice = await new Promise(resolve => {
+        pendingAgentDecisions[messageId] = resolve;
+      });
+
+      if (!userChoice || userChoice.decision !== 'continue') {
+        done(`Task ended after ${i - 1} steps.`);
+        return;
+      }
+
+      const added = Number(userChoice.additionalSteps) || defaultIncrement;
+      maxSteps += added;
+      step('action', `Authorized +${added} more steps (limit now ${maxSteps}).`);
+    }
+
+    step('thinking', `Step ${i} of ${maxSteps}…`);
 
     let msg;
     try {
-      const r = await fetch(`${OLLAMA}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages, tools: agentTools, stream: false })
-      });
-      if (!r.ok) throw new Error(ollamaError(r.status));
-      msg = (await r.json()).message;
-    } catch (e) { step('error', `Model error: ${e.message}`); done('Agent stopped due to an error.'); return; }
+      msg = await callAgentLLM(model, messages);
+    } catch (e) {
+      step('error', `Model error: ${e.message}`);
+      done('Agent stopped due to an error.');
+      return;
+    }
 
     const toolCalls = msg?.tool_calls;
 
-    // No tool calls: model returned plain text — try text parsing, else treat as final answer
     if (!toolCalls?.length) {
       const content = msg?.content?.trim() || '';
       const action = parseAction(content);
@@ -336,21 +495,23 @@ Rules:
       return;
     }
 
-    // Append the assistant turn to the thread
     messages.push({ role: 'assistant', content: msg.content || '', tool_calls: toolCalls });
 
     for (const tc of toolCalls) {
       const name = tc.function.name;
-      const args = tc.function.arguments; // already an object in Ollama (not a JSON string)
+      let args = tc.function.arguments;
+      if (typeof args === 'string') {
+        try { args = JSON.parse(args); } catch {}
+      }
 
       if (name === 'done') { done(args.result); return; }
 
       const desc = {
         click:    `Click ${args.refId}`,
-        type:     `Type "${String(args.text || '').slice(0, 50)}" into ${args.refId}`,
+        type:     `Type "${String(args.text || '').slice(0, 40)}" into ${args.refId}`,
         key:      `Press ${args.key}`,
         scroll:   `Scroll ${args.direction}`,
-        navigate: `Navigate to ${String(args.url || '').slice(0, 60)}`
+        navigate: `Navigate to ${String(args.url || '').slice(0, 50)}`
       }[name] || name;
       step('action', desc);
 
@@ -378,14 +539,13 @@ Rules:
         toolResult = `Error: ${e.message}`;
       }
 
-      // Include the updated page state in the tool result — model sees what changed
       const newTree = await getTree(tabId);
       const newSnippet = newTree.length > 3000 ? newTree.slice(0, 3000) + '\n…[truncated]' : newTree;
       messages.push({ role: 'tool', content: `${toolResult}\n\nUpdated page:\n${newSnippet}` });
     }
-  }
 
-  done(`Reached maximum steps (${maxSteps}).`);
+    i++;
+  }
 }
 
 // ── Open side panel on icon click ────────────────────────────────────────
