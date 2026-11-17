@@ -39,6 +39,10 @@
    "manifest_version": 3,
    "minimum_chrome_version": "116",
    "name": "Local-Agent Ollama",
+   "options_ui": {
+      "page": "settings.html",
+      "open_in_tab": true
+   },
    "side_panel": {
       "default_path": "sidepanel.html"
    },
