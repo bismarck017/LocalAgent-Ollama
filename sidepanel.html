@@ -11,19 +11,19 @@
 <body>
 <div class="app">
 
-  <!-- Top Toolbar -->
-  <header class="toolbar">
-    <div class="toolbar-left">
+  <!-- Top Minimalist Actions (all on the right) -->
+  <div class="top-actions">
+    <div class="top-actions-right">
       <!-- New chat -->
       <button id="new-chat-btn" class="top-icon-btn" title="New chat" aria-label="New chat">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
           <path d="M12 5v14M5 12h14"/>
         </svg>
       </button>
 
       <!-- Settings -->
-      <button id="settings-btn" class="top-icon-btn" title="Settings" aria-label="Settings">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <button id="settings-btn" class="top-icon-btn" title="Open Settings" aria-label="Settings">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="4" y1="21" x2="4" y2="14"></line>
           <line x1="4" y1="10" x2="4" y2="3"></line>
           <line x1="12" y1="21" x2="12" y2="12"></line>
@@ -36,36 +36,24 @@
         </svg>
       </button>
 
-      <!-- Theme toggle -->
+      <!-- Theme toggle in top right -->
       <button id="theme-btn" class="top-icon-btn" title="Toggle theme" aria-label="Toggle theme">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
           <path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10v8c2.21 0 4-1.79 4-4s-1.79-4-4-4z"/>
         </svg>
       </button>
     </div>
-
-    <!-- Right: Subtle connection status indicator -->
-    <div class="toolbar-right">
-      <div id="conn-pill" class="status-pill" title="Ollama server status">
-        <span id="status-dot" class="dot disconnected"></span>
-        <span id="status-text" class="status-text">Connecting…</span>
-        <button id="reconnect-btn" class="reconnect-btn" title="Reconnect to Ollama">
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-        </button>
-      </div>
-      <button id="export-btn" style="display:none"></button>
-    </div>
-  </header>
+  </div>
 
   <!-- Chat stream container -->
   <main id="chat" class="chat">
     <div id="welcome" class="welcome">
       <h2 class="welcome-title">How can I help you today?</h2>
-      <p class="welcome-desc">Chat, navigate web tasks, or reference open tabs with <code>@tabname</code>. Fully private and locally hosted.</p>
+      <p class="welcome-desc">Chat, navigate web tasks, or reference open tabs with <code>@tabname</code>. Fully private and customizable.</p>
       <div class="suggestions">
-        <button class="suggestion" data-q='Summarize @"'>Summarize a tab</button>
-        <button class="suggestion" data-q='What are the key points in @"'>Key points</button>
-        <button class="suggestion" data-q='Explain @"'>Explain this page</button>
+        <button class="suggestion" data-q="Summarize @">Summarize a tab</button>
+        <button class="suggestion" data-q="What are the key points in @">Key points</button>
+        <button class="suggestion" data-q="Explain @">Explain this page</button>
       </div>
     </div>
   </main>
@@ -90,7 +78,7 @@
       <div id="model-popover" class="model-popover" style="display:none">
         <div class="model-popover-header">
           <span class="popover-title">Available Models</span>
-          <button id="refresh-models-btn" class="icon-subtle-btn" title="Refresh from Ollama">
+          <button id="refresh-models-btn" class="icon-subtle-btn" title="Refresh models">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
           </button>
         </div>
@@ -100,13 +88,13 @@
       </div>
     </div>
 
-    <!-- The Text Box Container -->
+    <!-- The Text Box Container with rich editable pill support -->
     <div class="input-box-container">
-      <textarea id="input" placeholder="Ask anything…" rows="1"></textarea>
+      <div id="input" class="chat-input" contenteditable="true" role="textbox" aria-multiline="true" data-placeholder="Ask anything…" spellcheck="true"></div>
 
       <!-- Bottom controls row -->
       <div class="input-bottom-bar">
-        <!-- Agent Mode Switch Button (clean minimalist pill, no arrow or dot) -->
+        <!-- Agent Mode Switch Button -->
         <button id="agent-btn" class="agent-switch-btn" title="Switch between Chat and Agent mode" type="button">
           <span id="agent-btn-text" class="agent-btn-text">Chat</span>
         </button>
@@ -120,7 +108,7 @@
             </svg>
           </button>
 
-          <!-- Send Button (OpenAI circular arrow button) -->
+          <!-- Send Button -->
           <button id="send-btn" class="send-btn" disabled title="Send message" type="button" aria-label="Send message">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
               <line x1="12" y1="19" x2="12" y2="5"></line>
@@ -134,47 +122,6 @@
     <!-- Hidden fallback select for compatibility -->
     <select id="model-select" class="model-select" style="display:none"></select>
   </footer>
-
-  <!-- Settings Modal -->
-  <div id="settings-modal" class="settings-modal" style="display:none">
-    <div id="settings-backdrop" class="settings-backdrop"></div>
-    <div class="settings-card">
-      <div class="settings-header">
-        <div class="settings-title-group">
-          <h3>Settings</h3>
-        </div>
-        <button id="close-settings-btn" class="modal-close-btn" title="Close" aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
-        </button>
-      </div>
-
-      <div class="settings-content">
-        <div class="setting-item">
-          <div class="setting-info">
-            <label class="setting-label">Ollama Host</label>
-            <span class="setting-subtext">http://127.0.0.1:11434</span>
-          </div>
-          <button id="modal-reconnect-btn" class="setting-btn">Reconnect</button>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-info">
-            <label class="setting-label">Export Chat</label>
-            <span class="setting-subtext">Save conversation as Markdown</span>
-          </div>
-          <button id="modal-export-btn" class="setting-btn">Export .md</button>
-        </div>
-
-        <div class="setting-item">
-          <div class="setting-info">
-            <label class="setting-label">Clear History</label>
-            <span class="setting-subtext">Delete all saved messages</span>
-          </div>
-          <button id="modal-clear-btn" class="setting-btn danger">Clear</button>
-        </div>
-      </div>
-    </div>
-  </div>
 
 </div>
 <script src="/sidepanel.js"></script>
