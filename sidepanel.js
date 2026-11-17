@@ -1,14 +1,31 @@
 // Local-Agent Ollama — side panel
 
-const chat        = document.getElementById('chat');
-const input       = document.getElementById('input');
-const sendBtn     = document.getElementById('send-btn');
-const modelSelect = document.getElementById('model-select');
-const statusDot   = document.getElementById('status-dot');
-const statusText  = document.getElementById('status-text');
-const agentBtn    = document.getElementById('agent-btn');
-const autocomplete      = document.getElementById('autocomplete');
-const autocompleteList  = document.getElementById('autocomplete-list');
+const chat             = document.getElementById('chat');
+const input            = document.getElementById('input');
+const sendBtn          = document.getElementById('send-btn');
+const modelSelect      = document.getElementById('model-select');
+const statusDot        = document.getElementById('status-dot');
+const statusText       = document.getElementById('status-text');
+const agentBtn         = document.getElementById('agent-btn');
+const agentBtnText     = document.getElementById('agent-btn-text');
+const autocomplete     = document.getElementById('autocomplete');
+const autocompleteList = document.getElementById('autocomplete-list');
+
+// Figma redesign elements
+const modelShelf       = document.getElementById('model-shelf');
+const modelPopover     = document.getElementById('model-popover');
+const currentModelName = document.getElementById('current-model-name');
+const modelList        = document.getElementById('model-list');
+const modelCountBadge  = document.getElementById('model-count-badge');
+const refreshModelsBtn = document.getElementById('refresh-models-btn');
+const dictateBtn       = document.getElementById('dictate-btn');
+const settingsBtn      = document.getElementById('settings-btn');
+const settingsModal    = document.getElementById('settings-modal');
+const closeSettingsBtn = document.getElementById('close-settings-btn');
+const settingsBackdrop = document.getElementById('settings-backdrop');
+const modalReconnectBtn= document.getElementById('modal-reconnect-btn');
+const modalExportBtn   = document.getElementById('modal-export-btn');
+const modalClearBtn    = document.getElementById('modal-clear-btn');
 
 let history       = [];     // { role, text, timestamp }
 let allTabs       = [];
@@ -17,8 +34,10 @@ let isLoading     = false;
 let agentMode     = false;
 let atStart       = -1;
 let tabIdx        = -1;
-let activeStreams  = {};    // messageId -> { loadingEl, el, text, resolve, reject }
-let activeAgents  = {};    // messageId -> { card, stepsEl, headerEl, spinnerEl }
+let activeStreams = {};     // messageId -> { loadingEl, el, text, resolve, reject }
+let activeAgents  = {};     // messageId -> { card, stepsEl, headerEl, spinnerEl }
+let isRecording   = false;
+let speechRec     = null;
 
 // ── Utilities ─────────────────────────────────────────────────────────────
 
@@ -30,7 +49,9 @@ function ts(ms) {
   return new Date(ms).toLocaleTimeString([], { hour:'2-digit', minute:'2-digit' });
 }
 
-function scrollBottom() { chat.scrollTop = chat.scrollHeight; }
+function scrollBottom() {
+  chat.scrollTop = chat.scrollHeight;
+}
 
 // ── Markdown ──────────────────────────────────────────────────────────────
 
@@ -97,7 +118,10 @@ function renderMsg(role, text, timestamp) {
       navigator.clipboard.writeText(text).then(() => {
         copy.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg> Copied`;
         copy.classList.add('copied');
-        setTimeout(() => { copy.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`; copy.classList.remove('copied'); }, 2000);
+        setTimeout(() => {
+          copy.innerHTML = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> Copy`;
+          copy.classList.remove('copied');
+        }, 2000);
       });
     });
     footer.appendChild(copy);
@@ -162,7 +186,8 @@ chrome.runtime.onMessage.addListener(msg => {
       delete activeStreams[msg.messageId];
     }
     if (msg.action === 'streamError') {
-      stream.loadingEl?.remove(); stream.el?.remove();
+      stream.loadingEl?.remove();
+      stream.el?.remove();
       addError(msg.error);
       stream.reject(new Error(msg.error));
       delete activeStreams[msg.messageId];
@@ -230,7 +255,6 @@ async function handleSend() {
       activeStreams[messageId] = { loadingEl, el: null, text: '', resolve, reject };
     });
 
-    // Pass last 10 turns as context (excluding the one we just pushed)
     const historyContext = history.slice(-11, -1);
 
     chrome.runtime.sendMessage({
@@ -239,7 +263,7 @@ async function handleSend() {
     });
 
     try { await streamDone; }
-    catch {} // error already shown by streamError handler
+    catch {}
     finally { isLoading = false; updateSend(); }
     saveHistory();
   }
@@ -269,7 +293,37 @@ function startAgent(messageId, task) {
   };
 }
 
-// ── Models ────────────────────────────────────────────────────────────────
+// ── Models & Shelf ────────────────────────────────────────────────────────
+
+function renderModelList(models) {
+  modelList.innerHTML = '';
+  if (modelCountBadge) modelCountBadge.textContent = models.length;
+
+  models.forEach(m => {
+    const item = document.createElement('div');
+    item.className = `model-item ${m.name === selectedModel ? 'active' : ''}`;
+    item.innerHTML = `
+      <span class="model-item-title">${esc(m.name)}</span>
+      ${m.name === selectedModel ? `
+        <span class="model-item-check">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+      ` : ''}
+    `;
+
+    item.addEventListener('click', async () => {
+      selectedModel = m.name;
+      modelSelect.value = m.name;
+      currentModelName.textContent = m.name;
+      await chrome.storage.local.set({ selectedModel });
+      closeModelPopover();
+      renderModelList(models);
+      updateSend();
+    });
+
+    modelList.appendChild(item);
+  });
+}
 
 async function loadModels() {
   try {
@@ -282,6 +336,7 @@ async function loadModels() {
         opt.textContent = m.name;
         modelSelect.appendChild(opt);
       });
+
       const saved = (await chrome.storage.local.get('selectedModel')).selectedModel;
       if (saved && res.models.some(m => m.name === saved)) {
         modelSelect.value = saved;
@@ -290,8 +345,14 @@ async function loadModels() {
         selectedModel = res.models[0].name;
         modelSelect.value = selectedModel;
       }
+
+      currentModelName.textContent = selectedModel;
+      renderModelList(res.models);
     } else {
       modelSelect.innerHTML = '<option>No models</option>';
+      currentModelName.textContent = 'No models found';
+      modelList.innerHTML = '<div class="model-empty">No Ollama models found. Pull one via CLI.</div>';
+      if (modelCountBadge) modelCountBadge.textContent = '0';
       const msg = res?.error || 'Ollama not found';
       addError(msg.includes('OLLAMA_ORIGINS')
         ? msg
@@ -299,8 +360,26 @@ async function loadModels() {
     }
   } catch (e) {
     modelSelect.innerHTML = '<option>Ollama offline</option>';
+    currentModelName.textContent = 'Ollama offline';
+    modelList.innerHTML = '<div class="model-empty">Ollama is offline. Start ollama serve.</div>';
+    if (modelCountBadge) modelCountBadge.textContent = '0';
     addError('Cannot reach Ollama. Make sure it is running: ollama serve');
   }
+}
+
+function toggleModelPopover() {
+  const isOpen = modelPopover.style.display !== 'none';
+  if (isOpen) {
+    closeModelPopover();
+  } else {
+    modelPopover.style.display = 'flex';
+    modelShelf.classList.add('open');
+  }
+}
+
+function closeModelPopover() {
+  modelPopover.style.display = 'none';
+  modelShelf.classList.remove('open');
 }
 
 // ── Connection ────────────────────────────────────────────────────────────
@@ -338,7 +417,7 @@ function setSetupBanner(show) {
   chat.prepend(banner);
 }
 
-// ── Tabs & autocomplete ───────────────────────────────────────────────────
+// ── Tabs & Autocomplete ───────────────────────────────────────────────────
 
 async function loadTabs() {
   try {
@@ -383,12 +462,15 @@ function showAutocomplete(tabs) {
     item.dataset.i = i;
     if (tab.favIconUrl) {
       const img = document.createElement('img');
-      img.className = 'tab-favicon'; img.src = tab.favIconUrl;
-      img.width = img.height = 14; img.onerror = () => img.remove();
+      img.className = 'tab-favicon';
+      img.src = tab.favIconUrl;
+      img.width = img.height = 14;
+      img.onerror = () => img.remove();
       item.appendChild(img);
     }
-    const info = document.createElement('div'); info.className = 'tab-info';
-    info.innerHTML = `<div class="tab-title">${esc(tab.title||'Untitled')}</div><div class="tab-url">${esc(tab.url)}</div>`;
+    const info = document.createElement('div');
+    info.className = 'tab-info';
+    info.innerHTML = `<div class="tab-title">${esc(tab.title || 'Untitled')}</div><div class="tab-url">${esc(tab.url)}</div>`;
     item.appendChild(info);
     item.addEventListener('click', () => { tabIdx = i; selectTab(); });
     autocompleteList.appendChild(item);
@@ -398,7 +480,8 @@ function showAutocomplete(tabs) {
 
 function hideAutocomplete() {
   autocomplete.style.display = 'none';
-  tabIdx = -1; atStart = -1;
+  tabIdx = -1;
+  atStart = -1;
 }
 
 function navAutocomplete(dir) {
@@ -423,12 +506,84 @@ function selectTab() {
   updateSend();
 }
 
+// ── Voice Dictation ───────────────────────────────────────────────────────
+
+function initSpeechRecognition() {
+  const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRec) return null;
+
+  const rec = new SpeechRec();
+  rec.continuous = true;
+  rec.interimResults = true;
+  rec.lang = 'en-US';
+
+  rec.onstart = () => {
+    isRecording = true;
+    dictateBtn.classList.add('recording');
+    dictateBtn.title = 'Listening… click to finish';
+  };
+
+  rec.onresult = event => {
+    let finalTranscript = '';
+    for (let i = event.resultIndex; i < event.results.length; ++i) {
+      if (event.results[i].isFinal) {
+        finalTranscript += event.results[i][0].transcript;
+      }
+    }
+    if (finalTranscript) {
+      const current = input.value.trim();
+      input.value = current ? current + ' ' + finalTranscript.trim() : finalTranscript.trim();
+      updateSend();
+    }
+  };
+
+  rec.onerror = event => {
+    console.warn('Speech recognition error:', event.error);
+    stopRecording();
+  };
+
+  rec.onend = () => {
+    stopRecording();
+  };
+
+  return rec;
+}
+
+function toggleDictation() {
+  if (!speechRec) {
+    speechRec = initSpeechRecognition();
+  }
+
+  if (!speechRec) {
+    addError('Speech recognition is not supported in this browser environment.');
+    return;
+  }
+
+  if (isRecording) {
+    stopRecording();
+  } else {
+    try {
+      speechRec.start();
+    } catch (e) {
+      console.warn('Error starting speech recognition:', e);
+      stopRecording();
+    }
+  }
+}
+
+function stopRecording() {
+  isRecording = false;
+  dictateBtn.classList.remove('recording');
+  dictateBtn.title = 'Click to dictate message';
+  try { speechRec?.stop(); } catch {}
+}
+
 // ── Input ─────────────────────────────────────────────────────────────────
 
 function updateSend() {
   sendBtn.disabled = !input.value.trim() || !selectedModel || isLoading;
   input.style.height = 'auto';
-  input.style.height = Math.min(input.scrollHeight, 140) + 'px';
+  input.style.height = Math.min(input.scrollHeight, 150) + 'px';
   detectAt();
 }
 
@@ -442,33 +597,47 @@ input.addEventListener('keydown', e => {
     if (e.key === 'Enter' && tabIdx >= 0) { e.preventDefault(); selectTab(); return; }
     if (e.key === 'Escape')     { hideAutocomplete(); return; }
   }
-  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!sendBtn.disabled) handleSend(); }
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (!sendBtn.disabled) handleSend();
+  }
 });
 
 sendBtn.addEventListener('click', handleSend);
 
-// ── New chat ──────────────────────────────────────────────────────────────
+// ── New Chat ──────────────────────────────────────────────────────────────
 
 async function newChat() {
   history = [];
   await chrome.storage.local.remove('chatHistory');
   chat.innerHTML = '';
   const welcome = document.createElement('div');
-  welcome.id = 'welcome'; welcome.className = 'welcome';
+  welcome.id = 'welcome';
+  welcome.className = 'welcome';
   welcome.innerHTML = `
-    <div class="welcome-logo"><svg width="40" height="40" viewBox="0 0 691 691" fill="none"><rect width="691" height="691" rx="124" fill="#3b82f6"/><rect x="138" y="138" width="121" height="415" rx="42" fill="white"/><rect x="138" y="432" width="415" height="121" rx="42" fill="white"/></svg></div>
-    <h2 class="welcome-title">Local-Agent Ollama</h2>
-    <p class="welcome-desc">Chat, summarize pages, or reference any open tab with <code>@tabname</code>. Powered by Ollama — fully private, runs on your machine.</p>
+    <div class="welcome-badge">Local-Agent Ollama</div>
+    <h2 class="welcome-title">How can I help you today?</h2>
+    <p class="welcome-desc">Chat, execute browser actions, or mention any open tab with <code>@tabname</code>. Fully private and locally hosted.</p>
     <div class="suggestions">
       <button class="suggestion" data-q='Summarize @"'>Summarize a tab</button>
       <button class="suggestion" data-q='What are the key points in @"'>Key points</button>
       <button class="suggestion" data-q='Explain @"'>Explain this page</button>
     </div>`;
   chat.appendChild(welcome);
-  welcome.querySelectorAll('.suggestion').forEach(btn => {
-    btn.addEventListener('click', () => { input.value = btn.dataset.q; input.focus(); input.selectionStart = input.selectionEnd = input.value.length; updateSend(); });
+  attachSuggestionListeners(welcome);
+  input.value = '';
+  updateSend();
+}
+
+function attachSuggestionListeners(parent) {
+  parent.querySelectorAll('.suggestion').forEach(btn => {
+    btn.addEventListener('click', () => {
+      input.value = btn.dataset.q;
+      input.focus();
+      input.selectionStart = input.selectionEnd = input.value.length;
+      updateSend();
+    });
   });
-  input.value = ''; updateSend();
 }
 
 // ── Export ────────────────────────────────────────────────────────────────
@@ -505,33 +674,81 @@ async function loadHistory() {
 // ── Boot ──────────────────────────────────────────────────────────────────
 
 async function init() {
-  // Theme
+  // Theme toggle
   document.getElementById('theme-btn').addEventListener('click', () => {
     const next = document.documentElement.getAttribute('data-mode') === 'dark' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-mode', next);
     localStorage.setItem('la-theme', next);
   });
 
-  // New chat
+  // Top toolbar buttons
   document.getElementById('new-chat-btn').addEventListener('click', newChat);
 
-  // Export
-  document.getElementById('export-btn').addEventListener('click', exportChat);
+  // Settings Modal handlers
+  settingsBtn.addEventListener('click', () => {
+    settingsModal.style.display = 'flex';
+  });
 
-  // Agent mode
+  closeSettingsBtn.addEventListener('click', () => {
+    settingsModal.style.display = 'none';
+  });
+
+  settingsBackdrop.addEventListener('click', () => {
+    settingsModal.style.display = 'none';
+  });
+
+  modalReconnectBtn.addEventListener('click', async () => {
+    modalReconnectBtn.textContent = 'Checking…';
+    await checkConn();
+    await loadModels();
+    modalReconnectBtn.textContent = 'Reconnect';
+  });
+
+  modalExportBtn.addEventListener('click', () => {
+    exportChat();
+    settingsModal.style.display = 'none';
+  });
+
+  modalClearBtn.addEventListener('click', async () => {
+    await newChat();
+    settingsModal.style.display = 'none';
+  });
+
+  // Agent mode switcher
   agentBtn.addEventListener('click', () => {
     agentMode = !agentMode;
     agentBtn.classList.toggle('active', agentMode);
+    agentBtnText.textContent = agentMode ? 'Agent' : 'Chat';
     input.placeholder = agentMode ? 'Describe a task for the agent…' : 'Ask anything…';
   });
 
-  // Model change
-  modelSelect.addEventListener('change', async () => {
-    selectedModel = modelSelect.value;
-    await chrome.storage.local.set({ selectedModel });
+  // Dictation button
+  dictateBtn.addEventListener('click', toggleDictation);
+
+  // Model Shelf toggle
+  modelShelf.addEventListener('click', toggleModelPopover);
+  modelShelf.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleModelPopover();
+    }
   });
 
-  // Reconnect
+  refreshModelsBtn.addEventListener('click', async e => {
+    e.stopPropagation();
+    refreshModelsBtn.style.transform = 'rotate(180deg)';
+    await loadModels();
+    setTimeout(() => { refreshModelsBtn.style.transform = ''; }, 300);
+  });
+
+  // Dismiss model popover on click outside
+  document.addEventListener('click', e => {
+    if (!modelShelf.contains(e.target) && !modelPopover.contains(e.target)) {
+      closeModelPopover();
+    }
+  });
+
+  // Reconnect button
   document.getElementById('reconnect-btn').addEventListener('click', async () => {
     statusDot.className = 'dot connecting';
     statusText.textContent = 'Reconnecting…';
@@ -539,10 +756,8 @@ async function init() {
     await loadModels();
   });
 
-  // Suggestion buttons
-  document.querySelectorAll('.suggestion').forEach(btn => {
-    btn.addEventListener('click', () => { input.value = btn.dataset.q; input.focus(); input.selectionStart = input.selectionEnd = input.value.length; updateSend(); });
-  });
+  // Initial welcome suggestion buttons
+  attachSuggestionListeners(document);
 
   await loadTabs();
   setInterval(loadTabs, 10000);
