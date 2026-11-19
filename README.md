@@ -16,7 +16,7 @@ A private, hybrid AI browser extension powered by [Ollama](https://ollama.com) a
 
 - **Chat** — ask questions about any open tab using interactive `@tabname` mention pills
 - **Agent mode** — AI can navigate, click, type, and read pages autonomously with configurable step controls
-- **Hybrid Inference** — run 100% locally with Ollama or connect to OpenRouter for cloud models (Claude 3.5 Sonnet, GPT-4o, etc.)
+- **Hybrid Inference** — run 100% locally with Ollama or connect to OpenRouter for cloud models (Deepseek V4.1, GPT-6, Nemotron 3.5)
 - **Tool calling** — uses native tool calling for capable models (recommended: 70B+ or frontier models)
 - **Voice Dictation** — click to dictate prompt messages directly into the composer
 - **Settings Dashboard** — configure endpoints, test model connections, and manage agent limits
