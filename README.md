@@ -6,8 +6,8 @@ Agentic showcase:
 </div>
 
 [![Chrome](https://img.shields.io/badge/Chrome-Supported-4285F4?style=flat&logo=googlechrome&logoColor=white)](https://chromewebstore.google.com/detail/local-agent-ollama/mkhiohkkekffefiggoijacbgcpdfmlfp?authuser=0&hl=en)
-[![Firefox](https://img.shields.io/badge/Firefox-Coming%20Soon-FF7139?style=flat&logo=firefox-browser&logoColor=white)]()
-[![Ollama](https://img.shields.io/badge/Ollama-Integrated-green?style=flat&logo=llama&logoColor=white)](https://github.com/ollama/ollama)
+[![Firefox](https://img.shields.io/badge/Firefox-Supported-FF7139?style=flat&logo=firefox-browser&logoColor=white)]()
+[![Ollama](https://img.shields.io/badge/Ollama-Supported-green?style=flat&logo=llama&logoColor=white)](https://github.com/ollama/ollama)
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-Supported-blueviolet?style=flat)](https://openrouter.ai)
 
 A private, hybrid AI browser extension powered by [Ollama](https://ollama.com) and [OpenRouter](https://openrouter.ai). Chat with any webpage, summarize tabs, and automate browser tasks — runs locally on your machine, with optional cloud model support.
