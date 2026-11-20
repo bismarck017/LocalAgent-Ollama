@@ -26,7 +26,7 @@ A private, hybrid AI browser extension powered by [Ollama](https://ollama.com) a
 - [Ollama](https://ollama.com) running locally (for local models) and/or an [OpenRouter](https://openrouter.ai) API key (for cloud models)
 - Chrome 116+
 
-## Installation
+## Installation 
 
 1. Clone or download this repo
 2. Open Chrome and go to `chrome://extensions`
